@@ -67,11 +67,11 @@ plugs:
   sys-bus-vmbus-devices:
     interface: system-files
     write:
-      - "/sys/devices/LNXSYSTM:00"
       - "/sys/bus/vmbus/devices"
-    read:
+  sys-LNXSYSTEM00:
+    interface: system-files
+    write:
       - "/sys/devices/LNXSYSTM:00"
-      - "/sys/bus/vmbus/devices"
 
 apps:
   waagent:
