@@ -68,7 +68,7 @@ plugs:
     interface: system-files
     write:
       - "/sys/bus/vmbus/devices"
-  sys-LNXSYSTEM00:
+  sys-LNXSYSTM00:
     interface: system-files
     write:
       - "/sys/devices/LNXSYSTM:00"
