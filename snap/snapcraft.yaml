@@ -1,11 +1,12 @@
 name: waagent
-base: core24
+base: core26
 version: git
 summary: Microsoft Azure Linux Agent
 description: |
   The Microsoft Azure Linux Agent (waagent) manages Linux provisioning and
   VM interaction with the Azure Fabric Controller.
 
+build-base: devel
 grade: devel
 confinement: strict
 
