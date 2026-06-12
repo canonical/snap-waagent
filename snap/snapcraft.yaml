@@ -19,6 +19,29 @@ parts:
       - python3-virtualenv
       - libcrypt-dev
     override-build: |
+      # Under strict confinement no interface grants CAP_DAC_OVERRIDE, so the
+      # agent cannot rewrite the 0400 certificate artifacts it creates in
+      # lib dir when a goal state carries certificates; every goal-state
+      # fetch then fails and VM status is never reported. Keep owner write
+      # permission (0600) - security-equivalent for root-owned files.
+      sed -i 's|os\.chmod(path, stat\.S_IRUSR)|os.chmod(path, stat.S_IRUSR \| stat.S_IWUSR)|' \
+          azurelinuxagent/ga/update.py
+      grep -q 'S_IRUSR | stat.S_IWUSR' azurelinuxagent/ga/update.py
+
+      # Drop the pre-report_ready host-key wait. wait_for_ssh_host_key() polls
+      # /etc/ssh/ssh_host_*_key.pub and runs `ssh-keygen -lf` on it purely as a
+      # barrier - its return value is assigned to a variable flagged unused
+      # (# pylint: disable=W0612) and never reaches report_ready (which sends
+      # only ProvisionStatus(status="Ready"), no thumbprint). Under strict
+      # confinement the /etc/ssh reads are AppArmor-denied, so the barrier
+      # burns its 1800s timeout -> ProvisioningFailed. cloud-init owns SSH
+      # host-key generation here, so removing the (functionally empty) barrier
+      # lets the agent report Ready without needing a system-files plug for
+      # /etc/ssh.
+      sed -i 's|.*thumbprint = self\.wait_for_ssh_host_key().*|            pass  # waagent-snap: host-key wait removed (reads /etc/ssh, return value unused)|' \
+          azurelinuxagent/pa/provision/cloudinit.py
+      ! grep -q 'self\.wait_for_ssh_host_key' azurelinuxagent/pa/provision/cloudinit.py
+
       virtualenv .venv
       source .venv/bin/activate
 
@@ -38,10 +61,19 @@ parts:
       # Configuration.
       mkdir -p "${CRAFT_PART_INSTALL}/etc"
       sed -i 's|^#\s*Pid\.File=.*|Pid.File=/var/lib/waagent/waagent.pid|' config/waagent.conf
+      # cloud-init owns provisioning on this image; "auto" cannot detect it
+      # from inside the snap and falls back to mounting the provisioning DVD.
+      sed -i 's|^Provisioning\.Agent=.*|Provisioning.Agent=cloud-init|' config/waagent.conf
+      # Self-update downloads vanilla upstream code from the wireserver and
+      # silently replaces the snap-built agent (including the dac_override
+      # patch above). On Ubuntu Core, agent updates flow through snap refresh.
+      sed -i 's|^#\s*AutoUpdate\.UpdateToLatestVersion=.*|AutoUpdate.UpdateToLatestVersion=n|' config/waagent.conf
+      grep -q '^AutoUpdate.UpdateToLatestVersion=n' config/waagent.conf
       cp config/waagent.conf "${CRAFT_PART_INSTALL}/etc/"
 
     stage-packages:
       - python3
+      - openssh-client
       - openssh-server
       - openssl
       - iproute2
@@ -54,10 +86,23 @@ parts:
       - sed
 
 layout:
+  # NOTE: this layout hides the host's /var/lib/waagent, where cloud-init
+  # writes ovf-env.xml during provisioning, so wait_for_ovfenv times out
+  # (1800s) unless something copies the file into
+  # /var/snap/waagent/current/var/lib/waagent from the host side (e.g. a
+  # cloud-init runcmd in the gadget's cloud.conf). The layout cannot simply
+  # be dropped: without it /var/lib/waagent resolves to the read-only base
+  # squashfs inside the snap's mount namespace (EROFS) - the host's writable
+  # bind is not propagated, and system-files only grants permission, it
+  # does not create mounts.
   /var/lib/waagent:
     bind: $SNAP_DATA/var/lib/waagent
   /var/log/azure:
     bind: $SNAP_DATA/var/log/azure
+  # The agent log path is hardcoded (no conf option) and /var/log is not
+  # writable under confinement.
+  /var/log/waagent.log:
+    bind-file: $SNAP_DATA/var/log/waagent.log
 
 plugs:
   mntctl:
@@ -85,6 +130,9 @@ apps:
     plugs:
       # to communicate with the control plan
       - sys-bus-vmbus-devices
+      # ACPI namespace root (LNXSYSTM:00); the VMBus/synthetic devices hang
+      # under the ACPI tree, the agent walks it to enumerate them
+      - sys-devices-lnxsystm00
       # to be able to insert iptables rules
       # TODO(gjolly): I still see denied permission when iptables is called
       #               we could probably add the binary to the snap??
