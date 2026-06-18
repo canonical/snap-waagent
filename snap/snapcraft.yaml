@@ -11,7 +11,21 @@ grade: devel
 confinement: strict
 
 parts:
+  # core26 does not ship Python; strictly-confined Python snaps must pack their
+  # own interpreter. Stage the minimal runtime in a dedicated part (per the
+  # snapcraft core24->core26 migration guide) rather than pulling the broad
+  # python3 metapackage into the app part.
+  python-runtime:
+    plugin: nil
+    stage-packages:
+      - libpython3.14-minimal
+      - libpython3.14-stdlib
+      - python3-minimal # for the "python3" symlink
+      - python3.14-minimal
+      - python3.14-venv
+
   waagent:
+    after: [python-runtime]
     plugin: python
     source: https://github.com/Azure/WALinuxAgent.git
     source-branch: master
@@ -72,7 +86,7 @@ parts:
       cp config/waagent.conf "${CRAFT_PART_INSTALL}/etc/"
 
     stage-packages:
-      - python3
+      # python3 is provided by the python-runtime part
       - openssh-client
       - openssh-server
       - openssl
